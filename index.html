@@ -1,0 +1,607 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Mana Colony — 마나 정착지</title>
+<style>
+  :root {
+    --bg: #0a0a14;
+    --panel: #141426;
+    --accent: #6ee7d7;
+    --purple: #a78bfa;
+    --text: #d8d8e8;
+    --muted: #8a8aa8;
+    --good: #6ee7d7;
+    --warn: #fbbf24;
+    --bad: #f87171;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+    overflow: hidden;
+    height: 100vh;
+  }
+  #app { display: flex; height: 100vh; width: 100vw; }
+
+  #left {
+    width: 260px;
+    background: var(--panel);
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    border-right: 1px solid #22223a;
+    overflow-y: auto;
+  }
+  #stage {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    background: radial-gradient(circle at center, #10101f, #05050c);
+    min-width: 0;
+  }
+  canvas {
+    box-shadow: 0 0 60px rgba(110, 231, 215, 0.12);
+    border-radius: 4px;
+    cursor: crosshair;
+  }
+  #right {
+    width: 300px;
+    background: var(--panel);
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    border-left: 1px solid #22223a;
+    overflow: hidden;
+  }
+
+  h1 { font-size: 17px; margin: 0; letter-spacing: 0.5px;
+    background: linear-gradient(90deg, #6ee7d7, #a78bfa);
+    -webkit-background-clip: text; background-clip: text; color: transparent; }
+  h2 { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; margin: 0 0 6px; }
+  .sub { font-size: 11px; color: var(--muted); margin-top: -8px; line-height: 1.5; }
+
+  .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .stat { background: #0e0e1c; border: 1px solid #22223a; border-radius: 6px; padding: 8px; }
+  .stat .label { font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; }
+  .stat .value { font-size: 18px; font-weight: 600; color: var(--accent); }
+
+  .control { display: flex; flex-direction: column; gap: 4px; }
+  .control label { font-size: 11px; color: var(--muted); display: flex; justify-content: space-between; }
+  .control label span { color: var(--accent); }
+  input[type="range"] { width: 100%; accent-color: #a78bfa; }
+
+  .buttons { display: flex; gap: 6px; flex-wrap: wrap; }
+  button {
+    flex: 1; min-width: 70px;
+    background: #1e1e38; color: var(--text); border: 1px solid #33335a;
+    padding: 8px; border-radius: 6px; cursor: pointer; font-size: 12px; transition: background 0.15s;
+  }
+  button:hover { background: #2a2a4d; }
+  button.primary { background: linear-gradient(90deg, #6ee7d7, #a78bfa); color: #0a0a14; border: none; font-weight: 600; }
+
+  /* 이벤트 로그 */
+  #log { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 4px;
+    font-size: 11.5px; line-height: 1.5; padding-right: 4px; }
+  .logline { padding: 5px 8px; border-radius: 5px; background: #0e0e1c; border-left: 3px solid #33335a; animation: fade 0.4s; }
+  .logline.good { border-left-color: var(--good); }
+  .logline.warn { border-left-color: var(--warn); }
+  .logline.bad  { border-left-color: var(--bad); }
+  .logline.event{ border-left-color: var(--purple); background: #1a1030; }
+  .logline .t { color: var(--muted); font-size: 9px; }
+  @keyframes fade { from { opacity: 0; transform: translateY(-4px);} to {opacity:1; transform:none;} }
+
+  /* 캐릭터 카드 */
+  #card { background: #0e0e1c; border: 1px solid #2a2a4d; border-radius: 8px; padding: 12px; display: none; }
+  #card.show { display: block; }
+  #card .name { font-size: 15px; font-weight: 600; color: var(--accent); }
+  #card .role { font-size: 11px; color: var(--purple); margin-bottom: 2px; }
+  #card .traits { font-size: 10px; color: var(--muted); margin: 4px 0 8px; }
+  #card .trait { display:inline-block; background:#1e1e38; border:1px solid #33335a; border-radius:10px; padding:1px 7px; margin:1px; }
+  .bar { margin: 5px 0; }
+  .bar .blabel { font-size: 10px; color: var(--muted); display: flex; justify-content: space-between; }
+  .bar .track { height: 7px; background: #1e1e38; border-radius: 4px; overflow: hidden; margin-top: 2px; }
+  .bar .fill { height: 100%; border-radius: 4px; transition: width 0.2s; }
+  .mood { font-size: 11px; margin-top: 6px; padding: 5px; border-radius: 5px; text-align: center; }
+
+  .hint { font-size: 10.5px; color: var(--muted); line-height: 1.6; border-top: 1px solid #22223a; padding-top: 10px; }
+  .hint b { color: var(--accent); }
+</style>
+</head>
+<body>
+<div id="app">
+  <!-- 좌측: 제어 + 통계 -->
+  <div id="left">
+    <h1>✦ Mana Colony</h1>
+    <p class="sub">마나가 흐르는 땅에 15명의 주민이 정착했습니다. 각자 이름과 성격이 있고, 배고프거나 지치면 기분이 나빠지고, 때로는 무너집니다. 아무도 쓰지 않은 이야기를 지켜보세요.</p>
+
+    <div class="stats">
+      <div class="stat"><div class="label">생존자</div><div class="value" id="pop">0</div></div>
+      <div class="stat"><div class="label">일(day)</div><div class="value" id="day">0</div></div>
+      <div class="stat"><div class="label">평균 기분</div><div class="value" id="mood">0</div></div>
+      <div class="stat"><div class="label">저장 마나</div><div class="value" id="stored">0</div></div>
+    </div>
+
+    <div class="control">
+      <label>속도 <span id="speedVal">2x</span></label>
+      <input type="range" id="speed" min="0" max="6" value="2" step="1" />
+    </div>
+    <div class="control">
+      <label>마나 재생률 <span id="regenVal">1.0</span></label>
+      <input type="range" id="regen" min="0" max="3" value="1" step="0.1" />
+    </div>
+
+    <div class="buttons">
+      <button class="primary" id="playBtn">⏸ 일시정지</button>
+      <button id="resetBtn">↻ 새 정착지</button>
+    </div>
+    <div class="buttons">
+      <button id="stormBtn">⚡ 마나 폭풍</button>
+      <button id="blessBtn">✨ 축복(클릭모드)</button>
+    </div>
+
+    <div class="hint">
+      💡 <b>주민을 클릭</b>하면 우측에 상세 카드가 떠요.<br/>
+      <b>지도 클릭</b> = 그 자리에 마나 축복.<br/>
+      어두운 보라=황무지, 청록=마나 풍부.<br/>
+      주민 색: 초록=행복 · 노랑=불안 · 빨강=멘붕.
+    </div>
+  </div>
+
+  <!-- 중앙: 세계 -->
+  <div id="stage">
+    <canvas id="world"></canvas>
+  </div>
+
+  <!-- 우측: 캐릭터 카드 + 이벤트 로그 -->
+  <div id="right">
+    <div id="card">
+      <div class="name" id="cName">—</div>
+      <div class="role" id="cRole">—</div>
+      <div class="traits" id="cTraits"></div>
+      <div class="bar"><div class="blabel"><span>포만감</span><span id="cHungerV"></span></div><div class="track"><div class="fill" id="cHunger"></div></div></div>
+      <div class="bar"><div class="blabel"><span>활력</span><span id="cRestV"></span></div><div class="track"><div class="fill" id="cRest"></div></div></div>
+      <div class="bar"><div class="blabel"><span>기분</span><span id="cMoodV"></span></div><div class="track"><div class="fill" id="cMood"></div></div></div>
+      <div class="mood" id="cState">—</div>
+    </div>
+
+    <div style="display:flex; flex-direction:column; flex:1; min-height:0;">
+      <h2>📜 정착지 연대기</h2>
+      <div id="log"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ========================================================
+//  Mana Colony — 소수 정착지 (림월드 스타일 프로토타입)
+// ========================================================
+
+// ---------- 지형 설정 ----------
+const CELL = 7;
+const GRID_W = 90;
+const GRID_H = 80;
+const MAX_MANA = 100;
+
+const canvas = document.getElementById('world');
+const ctx = canvas.getContext('2d');
+canvas.width = GRID_W * CELL;
+canvas.height = GRID_H * CELL;
+
+// ---------- value noise ----------
+function makeNoise(w, h, scale, seed) {
+  let s = seed;
+  const rand = () => { s = (s * 1664525 + 1013904223) % 4294967296; return s / 4294967296; };
+  const gw = Math.ceil(w / scale) + 2, gh = Math.ceil(h / scale) + 2;
+  const grid = [];
+  for (let i = 0; i < gw * gh; i++) grid.push(rand());
+  const smooth = t => t * t * (3 - 2 * t);
+  const field = new Float32Array(w * h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const gx = x / scale, gy = y / scale;
+    const x0 = Math.floor(gx), y0 = Math.floor(gy);
+    const fx = smooth(gx - x0), fy = smooth(gy - y0);
+    const v00 = grid[y0*gw+x0], v10 = grid[y0*gw+x0+1];
+    const v01 = grid[(y0+1)*gw+x0], v11 = grid[(y0+1)*gw+x0+1];
+    const top = v00 + (v10-v00)*fx, bot = v01 + (v11-v01)*fx;
+    field[y*w+x] = top + (bot-top)*fy;
+  }
+  return field;
+}
+
+let mana, capacity, storedMana = 0;
+function generateWorld() {
+  const seed = Math.floor(Math.random()*1e9);
+  const big = makeNoise(GRID_W, GRID_H, 28, seed);
+  const small = makeNoise(GRID_W, GRID_H, 9, seed+7);
+  capacity = new Float32Array(GRID_W*GRID_H);
+  mana = new Float32Array(GRID_W*GRID_H);
+  for (let i=0;i<GRID_W*GRID_H;i++){
+    let v = big[i]*0.72 + small[i]*0.28;
+    v = Math.pow(v, 2.0);
+    capacity[i] = v*MAX_MANA;
+    mana[i] = capacity[i]*0.7;
+  }
+}
+const idx = (x,y)=> y*GRID_W + x;
+
+// ---------- 주민 생성 데이터 ----------
+const FIRST = ["아린","케이","도윤","세라","피오","루","나타","엔","미르","소라","카이","유나","레온","하루","비안","테오","리나","오슨","제피","무아"];
+const TRAITS = [
+  {k:"근면",   d:"일을 빨리 함",     work:1.4},
+  {k:"게으름", d:"일이 느림",       work:0.65},
+  {k:"대식가", d:"빨리 배고파짐",    hunger:1.5},
+  {k:"소식",   d:"적게 먹음",       hunger:0.6},
+  {k:"낙천적", d:"기분이 잘 안 상함", mood:1},
+  {k:"비관적", d:"쉽게 우울해짐",    mood:-1},
+  {k:"불면증", d:"잘 못 쉼",        rest:0.7},
+  {k:"강철멘탈",d:"멘붕에 강함",     tough:1},
+  {k:"예민함", d:"작은 일에 흔들림",  tough:-1},
+];
+const ROLES = ["채집가","수호자","방랑자","현자","견습생"];
+
+function pick(arr){ return arr[Math.floor(Math.random()*arr.length)]; }
+
+let agents = [];
+let usedNames = new Set();
+function makeAgent(x,y){
+  let name;
+  do { name = pick(FIRST); } while (usedNames.has(name) && usedNames.size < FIRST.length);
+  usedNames.add(name);
+  // 특성 1~2개
+  const t1 = pick(TRAITS);
+  let t2 = pick(TRAITS);
+  const traits = (t1===t2)? [t1] : [t1,t2];
+  return {
+    name, role: pick(ROLES), traits,
+    x, y, tx:x, ty:y,
+    hunger: 70+Math.random()*20,   // 포만감 (0=아사)
+    rest: 70+Math.random()*20,     // 활력
+    mood: 65+Math.random()*20,     // 기분
+    state: "평온",
+    alive: true,
+    carry: 0,
+    actionTimer: 0,
+  };
+}
+function traitVal(ag, key){
+  let v = (key==="work"||key==="hunger"||key==="rest")?1:0;
+  for (const t of ag.traits){ if (t[key]!==undefined){ if(key==="mood"||key==="tough") v+=t[key]; else v*=t[key]; } }
+  return v;
+}
+
+function spawnColony(n){
+  agents = []; usedNames = new Set();
+  // 마나가 괜찮은 중앙 근처에 모여서 시작
+  const cx = GRID_W/2, cy = GRID_H/2;
+  for (let i=0;i<n;i++){
+    const a = makeAgent(cx + (Math.random()-0.5)*14, cy + (Math.random()-0.5)*14);
+    agents.push(a);
+  }
+}
+
+// ---------- 이벤트 로그 ----------
+const logEl = document.getElementById('log');
+let logs = [];
+function log(msg, kind="normal"){
+  const d = day;
+  logs.push({msg, kind, day:d});
+  if (logs.length>120) logs.shift();
+  const div = document.createElement('div');
+  div.className = 'logline ' + (kind==="normal"?"":kind);
+  div.innerHTML = `<span class="t">Day ${d}</span><br/>${msg}`;
+  logEl.appendChild(div);
+  while (logEl.children.length>120) logEl.removeChild(logEl.firstChild);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+// ---------- 시뮬레이션 ----------
+let tick = 0, day = 0;
+const TICKS_PER_DAY = 120;
+
+function nearbyBestMana(cx, cy, radius){
+  let best=-1, bx=cx, by=cy;
+  for (let dy=-radius; dy<=radius; dy++) for (let dx=-radius; dx<=radius; dx++){
+    const nx=cx+dx, ny=cy+dy;
+    if (nx<0||ny<0||nx>=GRID_W||ny>=GRID_H) continue;
+    const m = mana[idx(nx,ny)];
+    if (m>best){ best=m; bx=nx; by=ny; }
+  }
+  return {bx,by,best};
+}
+
+function step(){
+  tick++;
+  if (tick % TICKS_PER_DAY === 0){ day++; onNewDay(); }
+
+  // 마나 재생
+  const regen = parseFloat(regenEl.value);
+  for (let i=0;i<mana.length;i++) if (mana[i]<capacity[i]) mana[i]=Math.min(capacity[i], mana[i]+regen*0.06);
+
+  for (let i=agents.length-1;i>=0;i--){
+    const ag = agents[i];
+    if (!ag.alive) continue;
+
+    // 욕구 감소
+    ag.hunger -= 0.12 * traitVal(ag,"hunger");
+    ag.rest   -= 0.08;
+
+    // 상태 결정 (우선순위: 멘붕 > 휴식 > 채집)
+    const moodMod = traitVal(ag,"mood");
+    const tough = traitVal(ag,"tough");
+
+    // 기분은 포만감/활력에 따라 서서히 수렴
+    let targetMood = (ag.hunger*0.5 + ag.rest*0.5) + moodMod*6;
+    ag.mood += (targetMood - ag.mood)*0.02;
+    ag.mood = Math.max(0, Math.min(100, ag.mood));
+
+    // 멘붕 판정
+    const breakThreshold = 18 - tough*6;
+    if (ag.mood < breakThreshold && ag.state !== "멘붕"){
+      ag.state = "멘붕"; ag.breakTimer = 150 + Math.random()*150;
+      log(`😱 <b>${ag.name}</b>의 정신이 무너졌습니다. 정처 없이 방황합니다...`, "bad");
+    }
+
+    const cx = Math.max(0,Math.min(GRID_W-1,Math.floor(ag.x)));
+    const cy = Math.max(0,Math.min(GRID_H-1,Math.floor(ag.y)));
+
+    if (ag.state === "멘붕"){
+      // 무작위 방황
+      ag.tx = ag.x + (Math.random()-0.5)*10;
+      ag.ty = ag.y + (Math.random()-0.5)*10;
+      ag.breakTimer--;
+      ag.mood += 0.15; // 서서히 회복
+      if (ag.breakTimer<=0 || ag.mood>40){ ag.state="평온"; log(`😌 <b>${ag.name}</b>이(가) 마음을 추슬렀습니다.`, "good"); }
+    } else if (ag.rest < 25){
+      ag.state = "휴식";
+      ag.rest += 0.6 * traitVal(ag,"rest");
+      ag.tx = ag.x; ag.ty = ag.y; // 제자리 휴식
+      if (ag.rest>80){ ag.state="평온"; }
+    } else if (ag.hunger < 55){
+      // 마나 채집: 근처 최고 마나로 이동 후 흡수
+      ag.state = "채집";
+      const {bx,by,best} = nearbyBestMana(cx,cy,4);
+      ag.tx = bx+0.5; ag.ty = by+0.5;
+      if (Math.abs(ag.x-(bx+0.5))<1.2 && Math.abs(ag.y-(by+0.5))<1.2 && best>1){
+        const eat = Math.min(mana[idx(bx,by)], 1.2*traitVal(ag,"work"));
+        mana[idx(bx,by)] -= eat;
+        ag.hunger = Math.min(100, ag.hunger + eat*2.2);
+        // 잉여는 정착지 저장고로
+        if (ag.hunger>92){ storedMana += eat*0.5; }
+      }
+    } else {
+      // 여유: 어슬렁 (사교/배회)
+      ag.state = "평온";
+      if (Math.random()<0.02){ ag.tx = ag.x+(Math.random()-0.5)*12; ag.ty = ag.y+(Math.random()-0.5)*12; }
+      ag.rest = Math.min(100, ag.rest+0.1);
+    }
+
+    // 굶주림 → 사망
+    if (ag.hunger <= 0){
+      ag.alive = false;
+      log(`💀 <b>${ag.name}</b>이(가) 굶주림 끝에 쓰러졌습니다. (${ag.role})`, "bad");
+      agents.splice(i,1);
+      if (selected===ag) hideCard();
+      continue;
+    }
+
+    // 이동 (목표를 향해)
+    ag.tx = Math.max(0,Math.min(GRID_W-0.01,ag.tx));
+    ag.ty = Math.max(0,Math.min(GRID_H-0.01,ag.ty));
+    const spd = (ag.state==="멘붕")?0.5:0.18;
+    ag.x += (ag.tx-ag.x)*spd;
+    ag.y += (ag.ty-ag.y)*spd;
+  }
+}
+
+// 하루가 지날 때: 관계/사건
+function onNewDay(){
+  // 저장고에서 굶는 주민 자동 급식 (공동체 나눔)
+  if (storedMana>5){
+    const hungry = agents.filter(a=>a.alive && a.hunger<30).sort((a,b)=>a.hunger-b.hunger);
+    for (const h of hungry){
+      if (storedMana<=0) break;
+      const give = Math.min(storedMana, 25);
+      h.hunger += give; storedMana -= give;
+      log(`🍲 정착지 저장고가 <b>${h.name}</b>을(를) 먹였습니다.`, "good");
+    }
+  }
+  // 가끔 우정/다툼
+  if (agents.length>=2 && Math.random()<0.5){
+    const a = pick(agents), b = pick(agents);
+    if (a!==b && a.alive && b.alive){
+      if ((a.mood+b.mood)/2 > 55){
+        log(`🤝 <b>${a.name}</b>와(과) <b>${b.name}</b>이(가) 함께 마나를 나누며 가까워졌습니다.`, "good");
+        a.mood+=5; b.mood+=5;
+      } else if (Math.random()<0.5){
+        log(`💢 <b>${a.name}</b>와(과) <b>${b.name}</b>이(가) 마나를 두고 다퉜습니다.`, "warn");
+        a.mood-=4; b.mood-=4;
+      }
+    }
+  }
+  // 가끔 자연 이벤트
+  if (Math.random()<0.18) randomEvent();
+}
+
+function randomEvent(){
+  const r = Math.random();
+  if (r<0.4){ triggerStorm(); }
+  else if (r<0.7){
+    // 가뭄: 마나 재생 저하 느낌 (일시적 흡수)
+    for (let i=0;i<mana.length;i++) mana[i]*=0.6;
+    log(`🏜️ <b>마나 가뭄</b>이 대지를 휩쓸었습니다. 마나가 메말랐습니다.`, "event");
+  } else {
+    // 이방인 합류
+    if (agents.length<40){
+      const a = makeAgent(GRID_W/2+(Math.random()-0.5)*10, GRID_H/2+(Math.random()-0.5)*10);
+      agents.push(a);
+      log(`🚶 이방인 <b>${a.name}</b>(${a.role})이(가) 정착지에 합류했습니다.`, "event");
+    }
+  }
+}
+
+function triggerStorm(){
+  // 무작위 지점에 마나 폭풍 → 거대한 마나 분출
+  const sx = Math.floor(Math.random()*GRID_W), sy=Math.floor(Math.random()*GRID_H);
+  const R=14;
+  for (let dy=-R;dy<=R;dy++) for(let dx=-R;dx<=R;dx++){
+    const nx=sx+dx, ny=sy+dy;
+    if (nx<0||ny<0||nx>=GRID_W||ny>=GRID_H) continue;
+    const dist=Math.hypot(dx,dy); if(dist>R) continue;
+    const i=idx(nx,ny);
+    const amt=(1-dist/R)*80;
+    capacity[i]=Math.min(MAX_MANA, capacity[i]+amt*0.5);
+    mana[i]=Math.min(MAX_MANA, mana[i]+amt);
+  }
+  log(`⚡ <b>마나 폭풍</b>이 몰아쳐 대지에 마나가 쏟아졌습니다!`, "event");
+}
+
+// ---------- 렌더링 ----------
+const img = ctx.createImageData(GRID_W, GRID_H);
+const tmpCanvas = document.createElement('canvas');
+tmpCanvas.width=GRID_W; tmpCanvas.height=GRID_H;
+const tmpCtx = tmpCanvas.getContext('2d');
+
+function moodColor(m){
+  if (m>55) return [110,231,215];   // 청록 (행복)
+  if (m>30) return [251,191,36];     // 노랑 (불안)
+  return [248,113,113];              // 빨강 (멘붕 직전)
+}
+
+function render(){
+  const data = img.data;
+  for (let i=0;i<mana.length;i++){
+    const t = mana[i]/MAX_MANA;
+    data[i*4]   = 18 + t*38;
+    data[i*4+1] = 10 + t*210;
+    data[i*4+2] = 32 + t*170;
+    data[i*4+3] = 255;
+  }
+  tmpCtx.putImageData(img,0,0);
+  ctx.imageSmoothingEnabled=false;
+  ctx.drawImage(tmpCanvas,0,0,GRID_W,GRID_H,0,0,canvas.width,canvas.height);
+
+  // 주민
+  for (const ag of agents){
+    if (!ag.alive) continue;
+    const [r,g,b] = moodColor(ag.mood);
+    const px = ag.x*CELL, py = ag.y*CELL;
+    // 선택 하이라이트
+    if (ag===selected){
+      ctx.strokeStyle = "#fff";
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(px,py,8,0,Math.PI*2); ctx.stroke();
+    }
+    ctx.fillStyle = `rgb(${r},${g},${b})`;
+    ctx.beginPath(); ctx.arc(px,py,3.2,0,Math.PI*2); ctx.fill();
+    // 멘붕 표시
+    if (ag.state==="멘붕"){ ctx.fillStyle="#fff"; ctx.font="9px sans-serif"; ctx.fillText("!",px-2,py-6); }
+  }
+}
+
+// ---------- 캐릭터 카드 ----------
+let selected = null;
+const card = document.getElementById('card');
+function showCard(ag){
+  selected = ag;
+  card.classList.add('show');
+}
+function hideCard(){ selected=null; card.classList.remove('show'); }
+function barColor(v){ return v>55?"var(--good)":v>30?"var(--warn)":"var(--bad)"; }
+function updateCard(){
+  if (!selected || !selected.alive){ if(selected && !selected.alive) hideCard(); return; }
+  const ag = selected;
+  document.getElementById('cName').textContent = ag.name;
+  document.getElementById('cRole').textContent = ag.role + " · " + ag.state;
+  document.getElementById('cTraits').innerHTML = ag.traits.map(t=>`<span class="trait" title="${t.d}">${t.k}</span>`).join("");
+  const set=(id,v)=>{ const f=document.getElementById(id); f.style.width=Math.max(0,Math.min(100,v))+"%"; f.style.background=barColor(v); };
+  set('cHunger', ag.hunger); set('cRest', ag.rest); set('cMood', ag.mood);
+  document.getElementById('cHungerV').textContent = Math.round(ag.hunger);
+  document.getElementById('cRestV').textContent = Math.round(ag.rest);
+  document.getElementById('cMoodV').textContent = Math.round(ag.mood);
+  const st = document.getElementById('cState');
+  if (ag.mood>55){ st.textContent="😊 "+ag.state+" — 평온합니다"; st.style.background="#0d2a26"; st.style.color="var(--good)"; }
+  else if (ag.mood>30){ st.textContent="😟 "+ag.state+" — 불안합니다"; st.style.background="#2a240d"; st.style.color="var(--warn)"; }
+  else { st.textContent="😱 "+ag.state+" — 위태롭습니다"; st.style.background="#2a0d0d"; st.style.color="var(--bad)"; }
+}
+
+// ---------- UI ----------
+const speedEl=document.getElementById('speed');
+const regenEl=document.getElementById('regen');
+const playBtn=document.getElementById('playBtn');
+const resetBtn=document.getElementById('resetBtn');
+const stormBtn=document.getElementById('stormBtn');
+const blessBtn=document.getElementById('blessBtn');
+let running=true;
+let blessMode=true; // 지도 클릭 = 축복
+
+function updateStats(){
+  document.getElementById('pop').textContent = agents.length;
+  document.getElementById('day').textContent = day;
+  const m = agents.length? agents.reduce((s,a)=>s+a.mood,0)/agents.length : 0;
+  document.getElementById('mood').textContent = Math.round(m);
+  document.getElementById('stored').textContent = Math.round(storedMana);
+}
+
+function loop(){
+  if (running){
+    const steps = parseInt(speedEl.value);
+    for (let s=0;s<steps;s++) step();
+  }
+  render(); updateCard(); updateStats();
+  requestAnimationFrame(loop);
+}
+
+function reset(){
+  generateWorld();
+  spawnColony(15);
+  storedMana=0; tick=0; day=0; logs=[]; logEl.innerHTML="";
+  hideCard();
+  log("🌅 새로운 정착지가 세워졌습니다. 15명의 주민이 마나의 땅에 발을 디뎠습니다.", "event");
+}
+
+speedEl.oninput=()=>document.getElementById('speedVal').textContent=speedEl.value+'x';
+regenEl.oninput=()=>document.getElementById('regenVal').textContent=parseFloat(regenEl.value).toFixed(1);
+playBtn.onclick=()=>{ running=!running; playBtn.textContent=running?'⏸ 일시정지':'▶ 재생'; };
+resetBtn.onclick=reset;
+stormBtn.onclick=triggerStorm;
+blessBtn.onclick=()=>{ blessMode=!blessMode; blessBtn.textContent = blessMode?'✨ 축복(클릭모드)':'👆 선택(클릭모드)'; };
+
+canvas.addEventListener('click', e=>{
+  const rect=canvas.getBoundingClientRect();
+  const mx=(e.clientX-rect.left)/rect.width*GRID_W;
+  const my=(e.clientY-rect.top)/rect.height*GRID_H;
+
+  // 먼저 주민 클릭 판정 (가까우면 선택)
+  let nearest=null, nd=3;
+  for (const ag of agents){ const d=Math.hypot(ag.x-mx, ag.y-my); if (d<nd){ nd=d; nearest=ag; } }
+  if (nearest){ showCard(nearest); return; }
+
+  if (blessMode){
+    const R=6;
+    const cx=Math.floor(mx), cy=Math.floor(my);
+    for (let dy=-R;dy<=R;dy++) for(let dx=-R;dx<=R;dx++){
+      const nx=cx+dx, ny=cy+dy;
+      if (nx<0||ny<0||nx>=GRID_W||ny>=GRID_H) continue;
+      const dist=Math.hypot(dx,dy); if(dist>R) continue;
+      const i=idx(nx,ny);
+      capacity[i]=Math.min(MAX_MANA, capacity[i]+(1-dist/R)*30);
+      mana[i]=Math.min(MAX_MANA, mana[i]+(1-dist/R)*50);
+    }
+  }
+});
+
+// 시작
+document.getElementById('speedVal').textContent=speedEl.value+'x';
+reset();
+loop();
+</script>
+</body>
+</html>
