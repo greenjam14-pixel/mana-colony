@@ -127,6 +127,8 @@
       <div class="stat"><div class="label">일(day)</div><div class="value" id="day">0</div></div>
       <div class="stat"><div class="label">각성자 수</div><div class="value" id="awakened">0</div></div>
       <div class="stat"><div class="label">최고 각성</div><div class="value" id="topTier" style="font-size:13px">무지</div></div>
+      <div class="stat"><div class="label">🐉 변이체</div><div class="value" id="monsterCount" style="color:#f87171">0</div></div>
+      <div class="stat"><div class="label">누적 희생</div><div class="value" id="deathsStat" style="color:#f87171; font-size:16px">0</div></div>
     </div>
     <div class="stat" style="grid-column:1/3; margin-top:-8px">
       <div class="label">집단 평균 마나 지식</div>
@@ -175,6 +177,7 @@
       <div class="name" id="cName">—</div>
       <div class="role" id="cRole">—</div>
       <div class="traits" id="cTraits"></div>
+      <div class="bar"><div class="blabel"><span>❤ 체력</span><span id="cHpV"></span></div><div class="track"><div class="fill" id="cHp" style="background:#f87171"></div></div></div>
       <div class="bar"><div class="blabel"><span>포만감</span><span id="cHungerV"></span></div><div class="track"><div class="fill" id="cHunger"></div></div></div>
       <div class="bar"><div class="blabel"><span>활력</span><span id="cRestV"></span></div><div class="track"><div class="fill" id="cRest"></div></div></div>
       <div class="bar"><div class="blabel"><span>기분</span><span id="cMoodV"></span></div><div class="track"><div class="fill" id="cMood"></div></div></div>
@@ -295,6 +298,8 @@ function makeAgent(x,y){
     mood: 65+Math.random()*20,     // 기분
     knowledge: 0,                  // 마나 지식 (0 = 무지)
     tierIndex: 0,                  // 현재 도달한 단계
+    hp: 100,                       // 체력 (몬스터에게 공격받으면 감소)
+    fleeing: false,                // 몬스터로부터 도망 중
     state: "평온",
     alive: true,
     carry: 0,
@@ -334,6 +339,7 @@ function log(msg, kind="normal"){
 
 // ---------- 시뮬레이션 ----------
 let tick = 0, day = 0;
+let deaths = 0;   // 누적 사망(아사 + 변이체 희생)
 const TICKS_PER_DAY = 120;
 
 function nearbyBestMana(cx, cy, radius){
@@ -407,6 +413,118 @@ function tryLearn(ag, neighbors){
   }
 }
 
+// ---------- 몬스터 (마나 변이체) ----------
+let monsters = [];
+let monsterCounter = 0;
+let firstMonster = false;
+const MONSTER_NAMES = ["그림자이빨","마나귀","뒤틀린짐승","심연벌레","안개늑대","수정괴수","유령사슴","비명박쥐"];
+
+// 마나 짙은 타일에서 확률적으로 변이체 스폰
+function trySpawnMonster(){
+  // 변이체 수 상한: 주민 수에 비례 (초반엔 소수, 번성하면 늘어남)
+  const cap = Math.min(40, 6 + agents.length * 1.2);
+  if (monsters.length >= cap) return;
+  // 무작위 타일 몇 곳을 표본으로 검사
+  for (let s=0;s<4;s++){
+    const tx = Math.floor(Math.random()*GRID_W), ty = Math.floor(Math.random()*GRID_H);
+    const density = mana[idx(tx,ty)] / MAX_MANA;       // 0~1
+    if (density < 0.5) continue;                       // 꽤 짙어야 변이가 일어남
+    // 농도가 짙을수록 스폰 확률 급상승 (전체적으로 희소하게)
+    const p = Math.pow(density, 4) * 0.004;
+    if (Math.random() < p){
+      spawnMonster(tx+0.5, ty+0.5, density);
+    }
+  }
+}
+
+function spawnMonster(x, y, density){
+  // 변이 강도 = 태어난 곳의 마나 농도 (강할수록 크고 강함)
+  const mut = density; // 0.45~1
+  const m = {
+    id: ++monsterCounter,
+    name: pick(MONSTER_NAMES),
+    x, y, tx:x, ty:y,
+    mutation: mut,
+    maxHp: 30 + mut*90,
+    hp: 30 + mut*90,
+    size: 2.8 + mut*4.5,
+    speed: 0.05 + mut*0.14,
+    power: 3 + mut*10,        // 틱당 공격력 (접촉 지속 시 치명적)
+    target: null,
+    alive: true,
+    age: 0,
+  };
+  monsters.push(m);
+  if (!firstMonster){
+    firstMonster = true;
+    log(`🐉 마나가 짙은 땅에서 최초의 <b>변이체</b>가 태어났습니다. 세상은 더 이상 안전하지 않습니다.`, "event");
+  } else if (mut > 0.85 && Math.random()<0.5){
+    log(`🐲 짙은 마나가 거대한 <b>${m.name}</b>을(를) 빚어냈습니다.`, "event");
+  }
+}
+
+function updateMonsters(){
+  for (let i=monsters.length-1;i>=0;i--){
+    const m = monsters[i];
+    m.age++;
+    const mcx = Math.max(0,Math.min(GRID_W-1,Math.floor(m.x)));
+    const mcy = Math.max(0,Math.min(GRID_H-1,Math.floor(m.y)));
+    const density = mana[idx(mcx,mcy)] / MAX_MANA;
+
+    // 변이체는 마나로 유지된다 — 희박한 곳에선 서서히 쇠약
+    if (density < 0.2){
+      m.hp -= 0.3;
+    } else {
+      m.hp = Math.min(m.maxHp, m.hp + density*0.15); // 짙은 곳에선 천천히 회복
+    }
+    if (m.hp <= 0){
+      log(`☠️ 변이체 <b>${m.name}</b>이(가) 마나가 메마른 땅에서 스러졌습니다.`, "normal");
+      monsters.splice(i,1); continue;
+    }
+
+    // 가장 가까운 주민 추적
+    let prey=null, pd=1e9;
+    for (const a of agents){
+      if (!a.alive) continue;
+      const d = Math.hypot(a.x-m.x, a.y-m.y);
+      if (d<pd){ pd=d; prey=a; }
+    }
+    const DETECT = 12;
+    if (prey && pd < DETECT){
+      // 추격
+      m.tx = prey.x; m.ty = prey.y;
+      // 접촉 → 공격
+      if (pd < m.size/CELL + 1.2){
+        prey.hp -= m.power;
+        prey.mood = Math.max(0, prey.mood - 1.5);
+        prey.fleeing = true;
+        if (prey.hp <= 0){
+          prey.alive = false;
+          const extra = prey.tierIndex>=2 ? ` <b>${TIERS[prey.tierIndex].name}</b>의 지혜도 함께 사라졌습니다.` : "";
+          log(`🩸 <b>${prey.name}</b>이(가) 변이체 <b>${m.name}</b>에게 목숨을 잃었습니다.${extra}`, "bad");
+          deaths++;
+          const ai = agents.indexOf(prey);
+          if (ai>=0) agents.splice(ai,1);
+          if (selected===prey) hideCard();
+        }
+      }
+    } else {
+      // 배회 (마나 짙은 쪽으로 약하게 끌림)
+      if (Math.random()<0.02){
+        const {bx,by} = nearbyBestMana(mcx,mcy,5);
+        m.tx = bx+0.5 + (Math.random()-0.5)*6;
+        m.ty = by+0.5 + (Math.random()-0.5)*6;
+      }
+    }
+
+    // 이동
+    m.tx = Math.max(0,Math.min(GRID_W-0.01,m.tx));
+    m.ty = Math.max(0,Math.min(GRID_H-0.01,m.ty));
+    m.x += (m.tx-m.x)*m.speed;
+    m.y += (m.ty-m.y)*m.speed;
+  }
+}
+
 function step(){
   tick++;
   if (tick % TICKS_PER_DAY === 0){ day++; onNewDay(); }
@@ -414,6 +532,10 @@ function step(){
   // 마나 재생
   const regen = parseFloat(regenEl.value);
   for (let i=0;i<mana.length;i++) if (mana[i]<capacity[i]) mana[i]=Math.min(capacity[i], mana[i]+regen*0.06);
+
+  // 몬스터 스폰 & 행동
+  trySpawnMonster();
+  updateMonsters();
 
   for (let i=agents.length-1;i>=0;i--){
     const ag = agents[i];
@@ -438,7 +560,18 @@ function step(){
       if (neighbors.length) tryLearn(ag, neighbors);
     }
 
-    // 상태 결정 (우선순위: 멘붕 > 휴식 > 채집)
+    // 몬스터 위협 감지 (가장 가까운 몬스터)
+    let threat=null, td=1e9;
+    for (const m of monsters){
+      const d = Math.hypot(m.x-ag.x, m.y-ag.y);
+      if (d<td){ td=d; threat=m; }
+    }
+    ag.fleeing = (threat && td < 10);
+
+    // 안전하면 체력 서서히 회복
+    if (!ag.fleeing && ag.hp < 100) ag.hp = Math.min(100, ag.hp + 0.15);
+
+    // 상태 결정 (우선순위: 도망 > 멘붕 > 휴식 > 채집)
     const moodMod = traitVal(ag,"mood");
     const tough = traitVal(ag,"tough");
 
@@ -456,6 +589,27 @@ function step(){
 
     const cx = Math.max(0,Math.min(GRID_W-1,Math.floor(ag.x)));
     const cy = Math.max(0,Math.min(GRID_H-1,Math.floor(ag.y)));
+
+    if (ag.fleeing && ag.state !== "멘붕"){
+      // 공포: 위협의 반대 방향으로 도주 (마나 농도 무시, 살고 봐야 함)
+      ag.state = "도망";
+      const dx = ag.x - threat.x, dy = ag.y - threat.y;
+      const len = Math.hypot(dx,dy) || 1;
+      ag.tx = ag.x + dx/len*6;
+      ag.ty = ag.y + dy/len*6;
+      ag.mood = Math.max(0, ag.mood - 0.3); // 공포로 기분 급락
+      // 이동만 하고 아래 채집/휴식 로직은 건너뜀
+      ag.tx = Math.max(0,Math.min(GRID_W-0.01,ag.tx));
+      ag.ty = Math.max(0,Math.min(GRID_H-0.01,ag.ty));
+      ag.x += (ag.tx-ag.x)*0.35; // 도망은 빠르게
+      ag.y += (ag.ty-ag.y)*0.35;
+      // 생존 체크(아사)는 계속 적용되도록 아래로 흐르지 않게 continue 처리
+      if (ag.hunger <= 0){
+        ag.alive=false; deaths++; log(`💀 <b>${ag.name}</b>이(가) 도망치다 굶주림에 쓰러졌습니다.`, "bad");
+        agents.splice(i,1); if(selected===ag) hideCard();
+      }
+      continue;
+    }
 
     if (ag.state === "멘붕"){
       // 무작위 방황
@@ -500,6 +654,7 @@ function step(){
       } else {
         log(`💀 <b>${ag.name}</b>이(가) 굶주림 끝에 쓰러졌습니다. (${ag.role})`, "bad");
       }
+      deaths++;
       agents.splice(i,1);
       if (selected===ag) hideCard();
       continue;
@@ -694,6 +849,37 @@ function render(){
   }
   ctx.textAlign = "start";
 
+  // 몬스터 (마나 변이체)
+  for (const m of monsters){
+    const px = m.x*CELL, py = m.y*CELL;
+    const mut = m.mutation;
+    // 변이 강할수록 더 붉고 크게
+    const rr = 180 + mut*75 | 0, gg = 40 - mut*20 | 0, bb = 60 + mut*60 | 0;
+    // 불길한 오라
+    const grad = ctx.createRadialGradient(px,py,1, px,py,m.size+5);
+    grad.addColorStop(0, `rgba(${rr},${gg},${bb},0.5)`);
+    grad.addColorStop(1, `rgba(${rr},${gg},${bb},0)`);
+    ctx.fillStyle = grad;
+    ctx.beginPath(); ctx.arc(px,py,m.size+5,0,Math.PI*2); ctx.fill();
+    // 몸체 (삐죽한 느낌: 다각형)
+    ctx.fillStyle = `rgb(${rr},${gg},${bb})`;
+    ctx.beginPath();
+    const spikes = 5;
+    for (let k=0;k<spikes*2;k++){
+      const ang = Math.PI*k/spikes + m.age*0.03;
+      const rad = (k%2===0) ? m.size : m.size*0.55;
+      const sx = px + Math.cos(ang)*rad, sy = py + Math.sin(ang)*rad;
+      k===0 ? ctx.moveTo(sx,sy) : ctx.lineTo(sx,sy);
+    }
+    ctx.closePath(); ctx.fill();
+    // 체력바 (피해 입었을 때만)
+    if (m.hp < m.maxHp){
+      const bw=m.size*2;
+      ctx.fillStyle="rgba(0,0,0,0.5)"; ctx.fillRect(px-bw/2, py-m.size-6, bw, 2.5);
+      ctx.fillStyle="#f87171"; ctx.fillRect(px-bw/2, py-m.size-6, bw*(m.hp/m.maxHp), 2.5);
+    }
+  }
+
   // 범례 (좌상단 오버레이)
   drawLegend();
 }
@@ -703,10 +889,11 @@ function drawLegend(){
     ["#6ee7d7","행복 / 마나풍부"],
     ["#fbbf24","불안"],
     ["#f87171","위태·멘붕"],
+    ["#c84b78","🐉 마나 변이체"],
   ];
-  const iconItems = ["🍃 채집","💤 휴식","💢 멘붕"];
+  const iconItems = ["🍃채집 💤휴식 💢멘붕 🐉변이체"];
   const pad=8, lh=15;
-  const w=132, h=pad*2 + lh*(items.length+1) + 4;
+  const w=150, h=pad*2 + lh*(items.length+1) + 4;
   ctx.fillStyle="rgba(10,10,20,0.68)";
   ctx.strokeStyle="rgba(110,231,215,0.25)";
   ctx.lineWidth=1;
@@ -749,6 +936,9 @@ function updateCard(){
   document.getElementById('cTraits').innerHTML = ag.traits.map(t=>`<span class="trait" title="${t.d}">${t.k}</span>`).join("");
   const set=(id,v)=>{ const f=document.getElementById(id); f.style.width=Math.max(0,Math.min(100,v))+"%"; f.style.background=barColor(v); };
   set('cHunger', ag.hunger); set('cRest', ag.rest); set('cMood', ag.mood);
+  // 체력은 빨강 고정
+  const hpf=document.getElementById('cHp'); hpf.style.width=Math.max(0,Math.min(100,ag.hp))+"%";
+  document.getElementById('cHpV').textContent = Math.round(ag.hp);
   document.getElementById('cHungerV').textContent = Math.round(ag.hunger);
   document.getElementById('cRestV').textContent = Math.round(ag.rest);
   document.getElementById('cMoodV').textContent = Math.round(ag.mood);
@@ -791,6 +981,9 @@ function updateStats(){
   // 평균 지식 바 (숙련 60을 100%로 스케일)
   document.getElementById('avgKnowBar').style.width = Math.min(100, avgK/60*100) + "%";
 
+  document.getElementById('monsterCount').textContent = monsters.length;
+  document.getElementById('deathsStat').textContent = deaths;
+
   // 집단 마일스톤: 각성자 수가 특정 선을 넘으면 서사
   const milestones = [5, 10, 15, 25];
   for (const ms of milestones){
@@ -814,10 +1007,12 @@ function loop(){
 function reset(){
   generateWorld();
   spawnColony(15);
-  storedMana=0; tick=0; day=0; logs=[]; logEl.innerHTML="";
+  storedMana=0; tick=0; day=0; deaths=0; logs=[]; logEl.innerHTML="";
   // 각성 추적 초기화
   firstAwakening=false; knownCountMilestone=0;
   for (let i=0;i<tierFirstReached.length;i++) tierFirstReached[i]=(i===0);
+  // 몬스터 초기화
+  monsters=[]; monsterCounter=0; firstMonster=false;
   hideCard();
   log("🌅 새로운 정착지가 세워졌습니다. 15명의 주민이 마나의 땅에 발을 디뎠으나, 아직 아무도 그 힘을 알지 못합니다.", "event");
 }
