@@ -125,8 +125,14 @@
     <div class="stats">
       <div class="stat"><div class="label">생존자</div><div class="value" id="pop">0</div></div>
       <div class="stat"><div class="label">일(day)</div><div class="value" id="day">0</div></div>
-      <div class="stat"><div class="label">평균 기분</div><div class="value" id="mood">0</div></div>
-      <div class="stat"><div class="label">저장 마나</div><div class="value" id="stored">0</div></div>
+      <div class="stat"><div class="label">각성자 수</div><div class="value" id="awakened">0</div></div>
+      <div class="stat"><div class="label">최고 각성</div><div class="value" id="topTier" style="font-size:13px">무지</div></div>
+    </div>
+    <div class="stat" style="grid-column:1/3; margin-top:-8px">
+      <div class="label">집단 평균 마나 지식</div>
+      <div class="track" style="height:8px; background:#1e1e38; border-radius:4px; overflow:hidden; margin-top:5px">
+        <div id="avgKnowBar" style="height:100%; width:0%; background:linear-gradient(90deg,#a78bfa,#6ee7d7); transition:width .3s"></div>
+      </div>
     </div>
 
     <div class="control">
@@ -172,6 +178,8 @@
       <div class="bar"><div class="blabel"><span>포만감</span><span id="cHungerV"></span></div><div class="track"><div class="fill" id="cHunger"></div></div></div>
       <div class="bar"><div class="blabel"><span>활력</span><span id="cRestV"></span></div><div class="track"><div class="fill" id="cRest"></div></div></div>
       <div class="bar"><div class="blabel"><span>기분</span><span id="cMoodV"></span></div><div class="track"><div class="fill" id="cMood"></div></div></div>
+      <div class="bar"><div class="blabel"><span>✦ 마나 지식</span><span id="cKnowV"></span></div><div class="track"><div class="fill" id="cKnow" style="background:linear-gradient(90deg,#a78bfa,#6ee7d7)"></div></div></div>
+      <div class="mood" id="cTier" style="background:#1a1030; color:#a78bfa">—</div>
       <div class="mood" id="cState">—</div>
     </div>
 
@@ -247,7 +255,24 @@ const TRAITS = [
   {k:"불면증", d:"잘 못 쉼",        rest:0.7},
   {k:"강철멘탈",d:"멘붕에 강함",     tough:1},
   {k:"예민함", d:"작은 일에 흔들림",  tough:-1},
+  {k:"탐구심", d:"마나를 빨리 깨달음", curious:2.2},
+  {k:"둔감",   d:"마나를 잘 못 느낌",  curious:0.4},
 ];
+
+// ---------- 마나 지식 단계 정의 ----------
+// knowledge 값이 쌓이면 새로운 "단계"가 열린다. (불의 발견처럼)
+const TIERS = [
+  {min:0,   name:"무지",  short:"無知", desc:"마나를 모른다. 평범한 인간."},
+  {min:1,   name:"감지",  short:"感知", desc:"마나가 존재함을 안다. '저기 기운이 세다'"},
+  {min:10,  name:"공명",  short:"共鳴", desc:"마나를 몸에 담기 시작한다. 미약한 효과."},
+  {min:30,  name:"행사",  short:"行使", desc:"의지로 마나를 다룬다. 첫 마법다운 행위."},
+  {min:60,  name:"숙련",  short:"熟練", desc:"마법을 안정적으로 부린다."},
+];
+function tierOf(k){
+  let t = TIERS[0];
+  for (const tier of TIERS) if (k >= tier.min) t = tier;
+  return t;
+}
 const ROLES = ["채집가","수호자","방랑자","현자","견습생"];
 
 function pick(arr){ return arr[Math.floor(Math.random()*arr.length)]; }
@@ -268,6 +293,8 @@ function makeAgent(x,y){
     hunger: 70+Math.random()*20,   // 포만감 (0=아사)
     rest: 70+Math.random()*20,     // 활력
     mood: 65+Math.random()*20,     // 기분
+    knowledge: 0,                  // 마나 지식 (0 = 무지)
+    tierIndex: 0,                  // 현재 도달한 단계
     state: "평온",
     alive: true,
     carry: 0,
@@ -275,7 +302,7 @@ function makeAgent(x,y){
   };
 }
 function traitVal(ag, key){
-  let v = (key==="work"||key==="hunger"||key==="rest")?1:0;
+  let v = (key==="work"||key==="hunger"||key==="rest"||key==="curious")?1:0;
   for (const t of ag.traits){ if (t[key]!==undefined){ if(key==="mood"||key==="tough") v+=t[key]; else v*=t[key]; } }
   return v;
 }
@@ -320,6 +347,66 @@ function nearbyBestMana(cx, cy, radius){
   return {bx,by,best};
 }
 
+// ---------- 마나 각성(지식) 시스템 ----------
+let firstAwakening = false;       // 인류 최초 각성 여부
+const tierFirstReached = [true,false,false,false,false]; // 각 단계 최초 도달 기록 (0단계는 기본)
+let knownCountMilestone = 0;      // "N명이 마나를 안다" 마일스톤 추적
+
+// 한 주민의 지식을 올리고, 단계 상승 시 서사 기록
+function gainKnowledge(ag, amount){
+  if (amount <= 0) return;
+  ag.knowledge += amount;
+  // 최초 각성
+  if (!firstAwakening && ag.knowledge >= 1){
+    firstAwakening = true;
+    log(`✨ <b>${ag.name}</b>이(가) 마나의 존재를 처음으로 感知했습니다. 인류 최초의 각성입니다.`, "event");
+  }
+  // 단계 상승 체크
+  const newTier = TIERS.findIndex((t,i)=> ag.knowledge>=t.min && (i===TIERS.length-1 || ag.knowledge<TIERS[i+1].min));
+  if (newTier > ag.tierIndex){
+    ag.tierIndex = newTier;
+    const t = TIERS[newTier];
+    // 세계 최초로 이 단계에 도달?
+    if (!tierFirstReached[newTier]){
+      tierFirstReached[newTier] = true;
+      log(`🌟 <b>${ag.name}</b>이(가) 세계 최초로 마나 <b>${t.name}(${t.short})</b> 단계에 이르렀습니다. ${t.desc}`, "event");
+    } else {
+      log(`🔹 <b>${ag.name}</b>이(가) 마나 <b>${t.name}</b> 단계에 올랐습니다.`, "good");
+    }
+  }
+}
+
+// 발견: 마나 짙은 곳에 있으면 낮은 확률로 스스로 깨달음
+function tryDiscover(ag, manaHere){
+  const density = manaHere / MAX_MANA;           // 0~1
+  if (density < 0.15) return;                    // 희박하면 깨달을 거리가 없음
+  const curious = traitVal(ag,"curious");
+  // 기본 확률 (농도·탐구심에 비례). 아직 무지한 자가 첫 깨달음을 얻기가 가장 어렵다.
+  const base = ag.knowledge < 1 ? 0.0008 : 0.004;
+  const p = base * density * curious * (1 + ag.knowledge*0.01);
+  if (Math.random() < p){
+    gainKnowledge(ag, ag.knowledge < 1 ? 1 : (0.5 + Math.random()*1.5));
+  }
+}
+
+// 전파: 지식 높은 이웃에게서 배운다 (선생을 넘진 못함)
+function tryLearn(ag, neighbors){
+  // 가장 지식 높은 이웃 찾기
+  let best = null;
+  for (const o of neighbors){ if (o!==ag && o.alive && o.knowledge > ag.knowledge + 0.5){ if (!best || o.knowledge>best.knowledge) best=o; } }
+  if (!best) return;
+  const gap = best.knowledge - ag.knowledge;
+  const learn = Math.min(gap*0.5, 0.06) * traitVal(ag,"curious");
+  if (learn > 0){
+    const before = ag.knowledge;
+    gainKnowledge(ag, learn);
+    // 무지에서 막 깨어난 순간만 특별히 기록 (로그 폭주 방지)
+    if (before < 1 && ag.knowledge >= 1 && firstAwakening){
+      log(`📖 <b>${ag.name}</b>이(가) <b>${best.name}</b>에게서 마나를 배웠습니다.`, "normal");
+    }
+  }
+}
+
 function step(){
   tick++;
   if (tick % TICKS_PER_DAY === 0){ day++; onNewDay(); }
@@ -335,6 +422,21 @@ function step(){
     // 욕구 감소
     ag.hunger -= 0.12 * traitVal(ag,"hunger");
     ag.rest   -= 0.08;
+
+    // --- 마나 각성: 발견 & 전파 ---
+    // 멘붕 상태가 아니고(정신이 온전해야 배움), 어느 정도 여유가 있을 때
+    if (ag.state !== "멘붕"){
+      const kcx = Math.max(0,Math.min(GRID_W-1,Math.floor(ag.x)));
+      const kcy = Math.max(0,Math.min(GRID_H-1,Math.floor(ag.y)));
+      tryDiscover(ag, mana[idx(kcx,kcy)]);
+      // 반경 내 이웃에게 배움 (가까운 주민만)
+      const neighbors = [];
+      for (const o of agents){
+        if (o===ag || !o.alive) continue;
+        if (Math.abs(o.x-ag.x)<3 && Math.abs(o.y-ag.y)<3) neighbors.push(o);
+      }
+      if (neighbors.length) tryLearn(ag, neighbors);
+    }
 
     // 상태 결정 (우선순위: 멘붕 > 휴식 > 채집)
     const moodMod = traitVal(ag,"mood");
@@ -391,7 +493,13 @@ function step(){
     // 굶주림 → 사망
     if (ag.hunger <= 0){
       ag.alive = false;
-      log(`💀 <b>${ag.name}</b>이(가) 굶주림 끝에 쓰러졌습니다. (${ag.role})`, "bad");
+      // 각성자가 죽으면 그 지식의 손실을 애도
+      if (ag.tierIndex >= 2){
+        const t = TIERS[ag.tierIndex];
+        log(`💀 <b>${ag.name}</b>이(가) 쓰러졌습니다. <b>${t.name}</b>의 지혜가 그와 함께 묻혔습니다.`, "bad");
+      } else {
+        log(`💀 <b>${ag.name}</b>이(가) 굶주림 끝에 쓰러졌습니다. (${ag.role})`, "bad");
+      }
       agents.splice(i,1);
       if (selected===ag) hideCard();
       continue;
@@ -542,6 +650,17 @@ function render(){
       ctx.beginPath(); ctx.arc(px,py,8,0,Math.PI*2); ctx.stroke();
     }
 
+    // 마나 각성 오라 (지식 높을수록 보라빛 후광)
+    if (ag.knowledge >= 1){
+      const kk = Math.min(1, ag.knowledge/60);           // 0~1
+      const auraR = 5 + kk*7;
+      const grad = ctx.createRadialGradient(px,py,1, px,py,auraR);
+      grad.addColorStop(0, `rgba(167,139,250,${0.35+kk*0.4})`);
+      grad.addColorStop(1, "rgba(167,139,250,0)");
+      ctx.fillStyle = grad;
+      ctx.beginPath(); ctx.arc(px,py,auraR,0,Math.PI*2); ctx.fill();
+    }
+
     // 몸체 (멘붕이면 외곽선 빨강으로 강조)
     ctx.fillStyle = `rgb(${r},${g},${b})`;
     ctx.beginPath(); ctx.arc(px,py,3.4,0,Math.PI*2); ctx.fill();
@@ -633,6 +752,12 @@ function updateCard(){
   document.getElementById('cHungerV').textContent = Math.round(ag.hunger);
   document.getElementById('cRestV').textContent = Math.round(ag.rest);
   document.getElementById('cMoodV').textContent = Math.round(ag.mood);
+  // 마나 지식 바 (숙련 60을 100%로 스케일) + 단계
+  const kf = document.getElementById('cKnow');
+  kf.style.width = Math.min(100, ag.knowledge/60*100) + "%";
+  document.getElementById('cKnowV').textContent = ag.knowledge < 1 ? "—" : ag.knowledge.toFixed(1);
+  const tier = TIERS[ag.tierIndex];
+  document.getElementById('cTier').textContent = `✦ ${tier.name}(${tier.short}) — ${tier.desc}`;
   const st = document.getElementById('cState');
   if (ag.mood>55){ st.textContent="😊 "+ag.state+" — 평온합니다"; st.style.background="#0d2a26"; st.style.color="var(--good)"; }
   else if (ag.mood>30){ st.textContent="😟 "+ag.state+" — 불안합니다"; st.style.background="#2a240d"; st.style.color="var(--warn)"; }
@@ -652,9 +777,29 @@ let blessMode=true; // 지도 클릭 = 축복
 function updateStats(){
   document.getElementById('pop').textContent = agents.length;
   document.getElementById('day').textContent = day;
-  const m = agents.length? agents.reduce((s,a)=>s+a.mood,0)/agents.length : 0;
-  document.getElementById('mood').textContent = Math.round(m);
-  document.getElementById('stored').textContent = Math.round(storedMana);
+
+  // 각성 통계
+  let awakened = 0, topK = 0, sumK = 0;
+  for (const a of agents){
+    if (a.knowledge >= 1) awakened++;
+    if (a.knowledge > topK) topK = a.knowledge;
+    sumK += a.knowledge;
+  }
+  const avgK = agents.length ? sumK/agents.length : 0;
+  document.getElementById('awakened').textContent = awakened;
+  document.getElementById('topTier').textContent = tierOf(topK).name;
+  // 평균 지식 바 (숙련 60을 100%로 스케일)
+  document.getElementById('avgKnowBar').style.width = Math.min(100, avgK/60*100) + "%";
+
+  // 집단 마일스톤: 각성자 수가 특정 선을 넘으면 서사
+  const milestones = [5, 10, 15, 25];
+  for (const ms of milestones){
+    if (awakened >= ms && knownCountMilestone < ms){
+      knownCountMilestone = ms;
+      log(`📜 마나를 아는 자가 <b>${ms}명</b>을 넘었습니다. 각성의 물결이 퍼지고 있습니다.`, "event");
+      break;
+    }
+  }
 }
 
 function loop(){
@@ -670,8 +815,11 @@ function reset(){
   generateWorld();
   spawnColony(15);
   storedMana=0; tick=0; day=0; logs=[]; logEl.innerHTML="";
+  // 각성 추적 초기화
+  firstAwakening=false; knownCountMilestone=0;
+  for (let i=0;i<tierFirstReached.length;i++) tierFirstReached[i]=(i===0);
   hideCard();
-  log("🌅 새로운 정착지가 세워졌습니다. 15명의 주민이 마나의 땅에 발을 디뎠습니다.", "event");
+  log("🌅 새로운 정착지가 세워졌습니다. 15명의 주민이 마나의 땅에 발을 디뎠으나, 아직 아무도 그 힘을 알지 못합니다.", "event");
 }
 
 speedEl.oninput=()=>document.getElementById('speedVal').textContent=speedEl.value+'x';
